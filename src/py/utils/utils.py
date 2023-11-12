@@ -26,6 +26,17 @@ from System.Web import HttpUtility
 clr.AddReference('IronPython')
 from IronPython.Compiler import CallTarget0 
 
+clr.AddReferenceToFileAndPath("CurlThin/CurlThin.dll")
+curlThin_Indx = [x.FullName.Split(',')[0] for x in clr.References].IndexOf('CurlThin')
+curlThin_path = clr.References[curlThin_Indx].Location.Replace('CurlThin.dll','')
+clr.AddReferenceToFileAndPath("CurlThin/CurlThin.Native.dll")
+import CurlThin
+from CurlThin import CurlNative
+from CurlThin.Helpers import DataCallbackCopier
+from CurlThin.Enums import CURLoption
+from CurlThin.SafeHandles import SafeSlistHandle
+from CurlThin.Native import CurlResources
+
 # unmodifiable cache for speeding up calls to natural_compare 
 __keys_cache = None 
 
@@ -371,28 +382,25 @@ def get_html_string(url):
    '''
    
    try:
-      ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12
-      request = WebRequest.Create(url)
-      # latest version of comicvine api insists on a user agent (see bug #484).
-      # previously, it didn't like my non-standard user agent, I think (see bug #471).
-      # now, I have a standard user agent, which comicvine api seems to like.
-      request.UserAgent = "ComicVineScraper/" + \
-         Resources.SCRIPT_VERSION + " (https://github.com/cbanack/comic-vine-scraper/)" 
-      response = request.GetResponse()
-      # if the response code is not "OK", throw a web exception immediately.
-      # this stops red-herring errors later on as we try to parse bad results.
-      # usually this only happens if the CV server is temporarily down.
-      if response.StatusCode != HttpStatusCode.OK:
+      CurlNative.Init()
+      easy = CurlNative.Easy.Init()
+      dataCopier = DataCallbackCopier()
+      CurlNative.Easy.SetOpt(easy, CURLoption.URL, url)
+      CurlNative.Easy.SetOpt(easy, CURLoption.WRITEFUNCTION, dataCopier.DataHandler)
+      CurlNative.Easy.SetOpt(easy, CURLoption.CAINFO, curlThin_path + "curl-ca-bundle.crt")
+      headers = CurlNative.Slist.Append(SafeSlistHandle.Null, "User-Agent: ComicVineScraper/" + \
+         Resources.SCRIPT_VERSION + " (https://github.com/cbanack/comic-vine-scraper/)")
+      CurlNative.Easy.SetOpt(easy, CURLoption.HTTPHEADER, headers.DangerousGetHandle())
+      ciphers = "ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256"
+      CurlNative.Easy.SetOpt(easy, CURLoption.SSL_CIPHER_LIST, ciphers)
+      responseStatusCode = CurlNative.Easy.Perform(easy)
+      CurlNative.Slist.FreeAll(headers)
+      
+      if responseStatusCode != CurlThin.Enums.CURLcode.OK:
          raise WebException("server response code " + 
-            sstr(int(response.StatusCode))+" ("+sstr(response.StatusCode)+")" )
-      responseStream = response.GetResponseStream()
-      reader = StreamReader(responseStream, Encoding.UTF8)
-      page = reader.ReadToEnd()
-      with StringWriter() as writer: 
-         HttpUtility.HtmlDecode(page, writer)
-         page = writer.ToString()
+            sstr(int(responseStatusCode))+" ("+sstr(responseStatusCode)+")" )
+            
+      page = Encoding.UTF8.GetString(dataCopier.Stream.ToArray())
       return page
    finally:
-      if 'reader' in vars(): reader.Close()
-      if 'responseStream' in vars(): responseStream.Close()
-      if 'response' in vars(): response.Close()
+      if easy: easy.Dispose()
