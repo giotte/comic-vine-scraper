@@ -26,6 +26,17 @@ from System.Text import Encoding
 clr.AddReference('System.Drawing')
 from System.Drawing import Image
 
+clr.AddReferenceToFileAndPath("CurlThin/CurlThin.dll")
+curlThin_Indx = [x.FullName.Split(',')[0] for x in clr.References].IndexOf('CurlThin')
+curlThin_path = clr.References[curlThin_Indx].Location.Replace('CurlThin.dll','')
+clr.AddReferenceToFileAndPath("CurlThin/CurlThin.Native.dll")
+import CurlThin
+from CurlThin import CurlNative
+from CurlThin.Helpers import DataCallbackCopier
+from CurlThin.Enums import CURLoption
+from CurlThin.SafeHandles import SafeSlistHandle
+from CurlThin.Native import CurlResources
+
 # this cache is used to speed up __issue_parse_series_details.  it is a 
 # memory leak (until the main app shuts down), but it is small and worth it.
 __series_details_cache = None
@@ -449,12 +460,20 @@ def _query_image( ref, lasttry = False ):
       response_stream = None
       try:
          cvconnection.wait_until_ready() # throttle our request speed 
-         request = WebRequest.Create(image_url_s)
-         request.UserAgent = "[ComicVineScraper, version " + \
-         Resources.SCRIPT_VERSION + "]"
-         response = request.GetResponse()
-         response_stream = response.GetResponseStream()
-         retval = Image.FromStream(response_stream)
+         CurlNative.Init()
+         easy = CurlNative.Easy.Init()
+         dataCopier = DataCallbackCopier()
+         CurlNative.Easy.SetOpt(easy, CURLoption.URL, image_url_s)
+         CurlNative.Easy.SetOpt(easy, CURLoption.WRITEFUNCTION, dataCopier.DataHandler)
+         CurlNative.Easy.SetOpt(easy, CURLoption.CAINFO, curlThin_path + "curl-ca-bundle.crt")
+         headers = CurlNative.Slist.Append(SafeSlistHandle.Null, "User-Agent: ComicVineScraper/" + \
+            Resources.SCRIPT_VERSION + " (https://github.com/cbanack/comic-vine-scraper/)")
+         CurlNative.Easy.SetOpt(easy, CURLoption.HTTPHEADER, headers.DangerousGetHandle())
+         ciphers = "ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256"
+         CurlNative.Easy.SetOpt(easy, CURLoption.SSL_CIPHER_LIST, ciphers)
+         responseStatusCode = CurlNative.Easy.Perform(easy)
+         CurlNative.Slist.FreeAll(headers)
+         retval = Image.FromStream(dataCopier.Stream)
       except:
          if lasttry:
             log.debug_exc('ERROR retry image load failed:')
@@ -463,8 +482,7 @@ def _query_image( ref, lasttry = False ):
             log.debug('RETRY loading image -> ', image_url_s)
             retval = _query_image( ref, True )
       finally: 
-         if response: response.Dispose()
-         if response_stream: response_stream.Dispose()
+         if easy: easy.Dispose()
 
    # if this value is stil None, it means an error occurred, or else comicvine 
    # simply doesn't have any Image for the given ref object             
