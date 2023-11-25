@@ -493,8 +493,6 @@ def _query_image( ref, lasttry = False ):
 def _query_issue(issue_ref, slow_data):
    ''' ComicVine implementation of the identically named method in the db.py '''
    
-   del slow_data; # unused 
-
    # interesting: can we implement a cache here?  could speed things up...
    issue = Issue(issue_ref)
    
@@ -505,28 +503,8 @@ def _query_issue(issue_ref, slow_data):
    __issue_parse_story_credits(issue, dom)
    __issue_parse_summary(issue, dom)
    __issue_parse_roles(issue, dom)
-   
-   
-   #    the commented code below once scraped additional cover images and 
-   #    the community rating from Comic Vine directly. it did this by reading 
-   #    in the contents of an html page on the Comic Vine website, rather
-   #    than using part of the Comic Vine API.   This is against Comic 
-   #    Vine's acceptable use policy (see issue 421, 
-   #        https://github.com/cbanack/comic-vine-scraper/issues/421 )
-   #
-   #    I have removed this code to address this issue, but if Comic Vine
-   #    ever gives us the option to access additional cover art or community
-   #    ratings directly, the code below could be rewritten to get those details
-   #    again, and then the features that rely on it will start using that data
-   #    and working as they used to (the features affected are:  scraping
-   #    community rating, auto-identification of comic series, and searching
-   #    for additional covers for a particular issue.) 
-   
-   #if slow_data:
-      # grab extra cover images and a community rating score
-   #   page = cvconnection._query_issue_details_page(
-   #             __api_key, sstr(issue_ref.issue_key))
-   #   __issue_scrape_extra_details( issue, page )
+   if slow_data:
+      __parse_associated_images(issue, dom.results)
    
    return issue
 
@@ -786,6 +764,21 @@ def __parse_image_url(dom):
          imgurl_s = dom.image.thumb_url
          
    return imgurl_s          
+
+
+#===========================================================================
+def __parse_associated_images(issue, dom):
+   ''' Grab the associated_images for this issue out of the given DOM fragment. '''
+   
+   if "associated_images" in dom.__dict__:
+      if "original_url" in dom.associated_images.__dict__:
+         image_url = dom.associated_images.original_url
+         if is_string(image_url):
+            issue.image_urls_sl.append(image_url)
+         elif type(image_url) is list:
+            for img in image_url:
+               if is_string(img):
+                  issue.image_urls_sl.append(img)
 
 
 #===========================================================================
